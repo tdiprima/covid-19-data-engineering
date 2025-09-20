@@ -233,7 +233,7 @@ def copy2history_table():
 def build_query(table, pg_conn, num):
     if mode == "quarterly":
         print("build_query", table)
-    
+
     query_pg = (
         "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '"
         + table
@@ -259,7 +259,7 @@ def build_query(table, pg_conn, num):
                 if "text" in m_type:
                     m_type = "varchar"
                 b += m_name + " " + m_type + ","
-            
+
             if mode == "quarterly":
                 b = b[:-1]
             else:
@@ -276,7 +276,7 @@ def build_query(table, pg_conn, num):
                 head = next(my_file).strip().split(",")
             for h in head:
                 b += h + " varchar,"
-            
+
             if mode == "quarterly":
                 b += "load_time timestamp"
 
@@ -291,7 +291,7 @@ def build_query(table, pg_conn, num):
 def create_tables():
     logging.info("Creating tables")
     pg_conn = connect_postgres("pg_str")
-    
+
     if mode == "quarterly":
         global v_conn, v_cursor
         v_conn = connect_vertica()
@@ -361,18 +361,16 @@ def get_lists():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Vertica upload script")
     parser.add_argument(
-        "mode", 
-        choices=["daily", "quarterly"],
-        help="Upload mode: daily or quarterly"
+        "mode", choices=["daily", "quarterly"], help="Upload mode: daily or quarterly"
     )
     args = parser.parse_args()
-    
+
     mode = args.mode
     start_time = time.time()
     config_file = "config.json"
     v_schema = "schema_workspace"
     FORMAT = "[%(filename)s:%(lineno)s - %(levelname)s] %(message)s"
-    
+
     if mode == "daily":
         file_location = "./input"
         pg_schema = "schema_hi"
@@ -381,10 +379,10 @@ if __name__ == "__main__":
         file_location = "/data/covid/upload"
         pg_schema = "schema_rtf"
         log_file = "out_vert_quart.log"
-        
+
     logging.basicConfig(level=logging.INFO, filename=log_file, format=FORMAT)
     logging.info("BEGIN")
-    
+
     if mode == "daily":
         create_tables()
         bulk_upload()
@@ -394,7 +392,7 @@ if __name__ == "__main__":
         insert_tables()
         copy2history_table()
         v_conn.close()
-        
+
     run_time = "--- %s seconds ---" % (time.time() - start_time)
     logging.info("END %s", run_time)
     exit(0)

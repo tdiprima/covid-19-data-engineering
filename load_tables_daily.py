@@ -1,5 +1,13 @@
 """
-Unified PostgreSQL/Vertica ETL pipeline using Object-Oriented Programming
+PostgreSQL/Vertica ETL pipeline
+
+Usage:
+
+# For PostgreSQL (default)
+python load_tables_daily.py
+
+# For Vertica
+DB_TYPE=vertica python load_tables_daily.py
 """
 
 import csv
@@ -12,7 +20,7 @@ import shutil
 import subprocess
 import sys
 from abc import ABC, abstractmethod
-from typing import List, Any, Optional
+from typing import Any, List, Optional
 
 import sqlalchemy as sa
 from dateutil import parser as dateParser
@@ -20,7 +28,9 @@ from sqlalchemy import exc
 
 try:
     from vertica_python import connect as vertica_connect
-    from vertica_python.errors import ConnectionError, MissingSchema, QueryError
+    from vertica_python.errors import (ConnectionError, MissingSchema,
+                                       QueryError)
+
     VERTICA_AVAILABLE = True
 except ImportError:
     VERTICA_AVAILABLE = False
@@ -28,54 +38,50 @@ except ImportError:
 
 class DatabaseETL(ABC):
     """Abstract base class for database ETL operations"""
-    
+
     def __init__(self, config_file: str = "config.json"):
         self.config_file = config_file
         self.connection = None
         self.cursor = None
         self.default_data_type = "text"
-        
+
     @abstractmethod
     def get_db_connection(self):
         """Establish database connection"""
-        pass
-    
+
     @abstractmethod
     def execute_query(self, query: str, params: Optional[Any] = None):
         """Execute a database query"""
-        pass
-    
+
     @abstractmethod
     def fetch_results(self, query: str) -> List[Any]:
         """Fetch query results"""
-        pass
-    
+
     @abstractmethod
     def get_table_exists_query(self, table_name: str, schema: str) -> str:
         """Get query to check if table exists"""
-        pass
-    
+
     @abstractmethod
     def get_columns_query(self, table_name: str, schema: str) -> str:
         """Get query to retrieve table columns"""
-        pass
-    
+
     @abstractmethod
-    def get_alter_column_syntax(self, table_name: str, column_name: str, data_type: str) -> str:
+    def get_alter_column_syntax(
+        self, table_name: str, column_name: str, data_type: str
+    ) -> str:
         """Get ALTER COLUMN syntax for the database"""
-        pass
-    
+
     def close_connection(self):
         """Close database connection"""
         if self.connection:
             try:
-                if hasattr(self.connection, 'closed') and not self.connection.closed():
+                if hasattr(self.connection, "closed") and not self.connection.closed():
                     self.connection.close()
-                elif hasattr(self.connection, 'close'):
+                elif hasattr(self.connection, "close"):
                     self.connection.close()
             except Exception as e:
                 print(f"Error closing connection: {e}")
-    
+
     def is_bool(self, string: str) -> bool:
         return str(string).lower() in ["true", "false", "t", "f"]
 
@@ -158,13 +164,13 @@ class DatabaseETL(ABC):
         columns_str = ",".join(column_list)
         drop_query = f"DROP TABLE IF EXISTS {table_name} CASCADE;"
         create_query = f"CREATE TABLE {table_name} ({columns_str});"
-        
+
         try:
             self.execute_query(drop_query)
             print(f"Dropped table {table_name}")
         except Exception as e:
             print(f"Drop table error: {e}")
-        
+
         try:
             self.execute_query(create_query)
             print(f"Created table {table_name}")
@@ -176,7 +182,7 @@ class DatabaseETL(ABC):
         """Import CSV data to database table"""
         with open(file_path, "r", encoding="utf-8") as csvfile:
             csv_reader = csv.reader(csvfile, delimiter=",")
-            
+
             for line_count, row in enumerate(csv_reader):
                 if line_count == 0:
                     columns = ",".join(row)
@@ -187,7 +193,7 @@ class DatabaseETL(ABC):
                 escaped_values = [val.replace("'", "''") for val in row]
                 values_str = "'" + "','".join(escaped_values) + "'"
                 execute_string = f"{insert_query_base} VALUES ({values_str})"
-                
+
                 try:
                     self.execute_query(execute_string)
                     print(f"Inserted row {line_count}, {len(row)} columns")
@@ -195,7 +201,9 @@ class DatabaseETL(ABC):
                     print(f"Insert error at line {line_count}: {e}")
                     print(f"Query: {execute_string}")
 
-    def backup_history_file(self, file_location: str, csv_name: str, history_folder: str, date_time_str: str):
+    def backup_history_file(
+        self, file_location: str, csv_name: str, history_folder: str, date_time_str: str
+    ):
         """Backup CSV file to history folder"""
         file_path = os.path.join(file_location, csv_name)
         new_folder = f"upload_{date_time_str}"
@@ -219,14 +227,14 @@ class DatabaseETL(ABC):
         """Switch build table to production table"""
         full_table_name = f"{table_schema}.{table_name}"
         table_name_build = f"{table_schema}.{table_name}_build"
-        
+
         if self.is_table_exist(table_name, table_schema):
             drop_query = f"DROP TABLE {full_table_name} CASCADE;"
             try:
                 self.execute_query(drop_query)
             except Exception as e:
                 print(f"Drop table error: {e}")
-        
+
         rename_query = f"ALTER TABLE {table_name_build} RENAME TO {table_name};"
         try:
             self.execute_query(rename_query)
@@ -258,7 +266,7 @@ class DatabaseETL(ABC):
         """Alter column types based on data analysis"""
         db_table = f"{table_name}_build"
         record_count = self.get_record_count(table_schema, db_table)
-        
+
         if record_count > 10000:
             limit_count = 1000
         elif record_count > 5000:
@@ -267,25 +275,27 @@ class DatabaseETL(ABC):
             limit_count = 500
         else:
             limit_count = record_count
-        
+
         print(f"Analyzing {limit_count} records for type detection")
-        
+
         columns_query = self.get_columns_query(db_table, table_schema)
         column_list = self.get_return_list(columns_query)
-        
+
         tmp_table = f"{table_schema}.{db_table}"
         for column in column_list:
             query = f"SELECT {column} FROM {tmp_table} WHERE {column} IS NOT NULL LIMIT {limit_count};"
             value_list = self.get_return_list(query)
-            
+
             column_types = [self.guess_type(str(value).strip()) for value in value_list]
             unique_types = set(column_types)
-            
+
             final_type = self._determine_final_type(unique_types)
             print(f"Column {column}: {final_type}")
-            
+
             if final_type != self.default_data_type:
-                alter_query = self.get_alter_column_syntax(tmp_table, column, final_type)
+                alter_query = self.get_alter_column_syntax(
+                    tmp_table, column, final_type
+                )
                 try:
                     self.execute_query(alter_query)
                     print(f"Altered column {column} to {final_type}")
@@ -315,14 +325,20 @@ class DatabaseETL(ABC):
                 return "smallint"
         return self.default_data_type
 
-    def backup_csv_files(self, file_list: List[str], file_location: str, history_folder: str):
+    def backup_csv_files(
+        self, file_list: List[str], file_location: str, history_folder: str
+    ):
         """Backup all CSV files"""
         date_time_str = datetime.datetime.today().strftime("%Y_%m_%d")
         for csv_file in file_list:
             logging.info(f"Backing up: {file_location}/{csv_file} to {history_folder}")
-            self.backup_history_file(file_location, csv_file, history_folder, date_time_str)
+            self.backup_history_file(
+                file_location, csv_file, history_folder, date_time_str
+            )
 
-    def create_empty_tables(self, file_list: List[str], file_location: str, table_schema: str):
+    def create_empty_tables(
+        self, file_list: List[str], file_location: str, table_schema: str
+    ):
         """Create empty tables for all CSV files"""
         for csv_file in file_list:
             table_name = csv_file.replace(".csv", "").lower()
@@ -357,11 +373,11 @@ class DatabaseETL(ABC):
 
 class PostgreSQLETL(DatabaseETL):
     """PostgreSQL implementation of DatabaseETL"""
-    
+
     def __init__(self, config_file: str = "config.json"):
         super().__init__(config_file)
         self.default_data_type = "text"
-    
+
     def get_db_connection(self):
         """Establish PostgreSQL connection using SQLAlchemy"""
         with open(self.config_file) as f:
@@ -370,7 +386,7 @@ class PostgreSQLETL(DatabaseETL):
         engine = sa.create_engine(connection_uri)
         self.connection = engine.connect()
         return self.connection
-    
+
     def execute_query(self, query: str, params: Optional[Any] = None):
         """Execute PostgreSQL query"""
         try:
@@ -380,7 +396,7 @@ class PostgreSQLETL(DatabaseETL):
                 self.connection.execute(sa.text(query))
         except exc.SQLAlchemyError as e:
             raise e
-    
+
     def fetch_results(self, query: str) -> List[Any]:
         """Fetch PostgreSQL query results"""
         try:
@@ -389,40 +405,42 @@ class PostgreSQLETL(DatabaseETL):
         except exc.SQLAlchemyError as e:
             print(f"Query error: {e}")
             return []
-    
+
     def get_table_exists_query(self, table_name: str, schema: str) -> str:
         """PostgreSQL table existence query"""
         full_name = f"{schema}.{table_name}"
         return f"SELECT to_regclass('{full_name}');"
-    
+
     def get_columns_query(self, table_name: str, schema: str) -> str:
         """PostgreSQL columns query"""
         return f"""
             SELECT column_name FROM INFORMATION_SCHEMA.COLUMNS 
             WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{table_name}'
         """
-    
-    def get_alter_column_syntax(self, table_name: str, column_name: str, data_type: str) -> str:
+
+    def get_alter_column_syntax(
+        self, table_name: str, column_name: str, data_type: str
+    ) -> str:
         """PostgreSQL ALTER COLUMN syntax"""
         return f"ALTER TABLE {table_name} ALTER COLUMN {column_name} TYPE {data_type} USING {column_name}::{data_type};"
 
 
 class VerticaETL(DatabaseETL):
     """Vertica implementation of DatabaseETL"""
-    
+
     def __init__(self, config_file: str = "config.json"):
         super().__init__(config_file)
         self.default_data_type = "varchar"
-    
+
     def get_db_connection(self):
         """Establish Vertica connection"""
         if not VERTICA_AVAILABLE:
             raise ImportError("vertica_python package not available")
-            
+
         with open(self.config_file) as f:
             conn_info = json.load(f)
             conn_info["use_prepared_statements"] = True
-        
+
         try:
             self.connection = vertica_connect(**conn_info)
             self.cursor = self.connection.cursor()
@@ -430,7 +448,7 @@ class VerticaETL(DatabaseETL):
         except ConnectionError as e:
             print(f"Vertica connection error: {e}")
             raise
-    
+
     def execute_query(self, query: str, params: Optional[Any] = None):
         """Execute Vertica query"""
         try:
@@ -441,7 +459,7 @@ class VerticaETL(DatabaseETL):
             self.connection.commit()
         except (QueryError, MissingSchema) as e:
             raise e
-    
+
     def fetch_results(self, query: str) -> List[Any]:
         """Fetch Vertica query results"""
         try:
@@ -452,7 +470,7 @@ class VerticaETL(DatabaseETL):
         except QueryError as e:
             print(f"Query error: {e}")
             return []
-    
+
     def get_table_exists_query(self, table_name: str, schema: str) -> str:
         """Vertica table existence query"""
         return f"""
@@ -461,15 +479,17 @@ class VerticaETL(DatabaseETL):
                 WHERE table_schema = '{schema}' AND table_name = '{table_name}'
             );
         """
-    
+
     def get_columns_query(self, table_name: str, schema: str) -> str:
         """Vertica columns query"""
         return f"""
             SELECT column_name FROM v_catalog.columns 
             WHERE table_schema = '{schema}' AND table_name = '{table_name}';
         """
-    
-    def get_alter_column_syntax(self, table_name: str, column_name: str, data_type: str) -> str:
+
+    def get_alter_column_syntax(
+        self, table_name: str, column_name: str, data_type: str
+    ) -> str:
         """Vertica ALTER COLUMN syntax"""
         return f"ALTER TABLE {table_name} ALTER COLUMN {column_name} SET DATA TYPE {data_type} ALL PROJECTIONS;"
 
@@ -484,7 +504,9 @@ def create_etl_instance(db_type: str, config_file: str = "config.json") -> Datab
         raise ValueError(f"Unsupported database type: {db_type}")
 
 
-def batch_load_csv_to_tables_postgresql(file_list: List[str], file_location: str, table_schema: str):
+def batch_load_csv_to_tables_postgresql(
+    file_list: List[str], file_location: str, table_schema: str
+):
     """PostgreSQL-specific batch loading using COPY command"""
     sql_file_path = os.path.join(os.getcwd(), "insert.sql")
     if os.path.isfile(sql_file_path):
@@ -507,7 +529,9 @@ def batch_load_csv_to_tables_postgresql(file_list: List[str], file_location: str
         logging.error(f"PostgreSQL batch load error: {e}")
 
 
-def batch_load_csv_to_tables_vertica(file_list: List[str], file_location: str, table_schema: str):
+def batch_load_csv_to_tables_vertica(
+    file_list: List[str], file_location: str, table_schema: str
+):
     """Vertica-specific batch loading using COPY command"""
     sql_file = "batch_load_vertica.sql"
     sql_file_path = os.path.join(os.getcwd(), sql_file)
@@ -541,22 +565,22 @@ def main():
         filename="output.log",
         format="%(asctime)s :: %(levelname)s :: %(name)s :: Line No %(lineno)d :: %(message)s",
     )
-    
+
     # Configuration
     db_type = os.getenv("DB_TYPE", "postgresql")  # Default to PostgreSQL
     file_location = "./input/"
     history_folder = "./history"
     table_schema = "schema_hi"
-    
+
     # Validate directories
     if not os.path.exists(file_location):
         print(f"No such directory: {file_location}")
         sys.exit(1)
-    
+
     if not os.path.exists(history_folder):
         print(f"No such directory: {history_folder}")
         sys.exit(1)
-    
+
     # Create ETL instance
     try:
         etl = create_etl_instance(db_type)
@@ -564,7 +588,7 @@ def main():
     except Exception as e:
         print(f"Failed to create ETL instance: {e}")
         sys.exit(1)
-    
+
     # Get file list
     if db_type.lower() == "vertica" and os.path.exists("files.list"):
         # Vertica version reads from files.list
@@ -598,26 +622,26 @@ def main():
             "med_admin.csv",
             "med_admin_ingred.csv",
         ]
-    
+
     try:
         # Execute ETL pipeline
         etl.backup_csv_files(file_list, file_location, history_folder)
         etl.create_empty_tables(file_list, file_location, table_schema)
-        
+
         # Database-specific batch loading
         if db_type.lower() == "postgresql":
             batch_load_csv_to_tables_postgresql(file_list, file_location, table_schema)
         elif db_type.lower() == "vertica":
             batch_load_csv_to_tables_vertica(file_list, file_location, table_schema)
-        
+
         # Common operations
         etl.alter_tables_column(file_list, table_schema)
         etl.switch_tables_name(file_list, table_schema)
         etl.get_tables_record_count(file_list, table_schema)
-        
+
     finally:
         etl.close_connection()
-    
+
     print("ETL pipeline completed successfully!")
 
 

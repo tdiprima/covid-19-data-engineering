@@ -2,6 +2,7 @@
 # Reads file list and outputs TABLE,COLUMN,TYPE format
 
 import time
+
 import pandas as pd
 
 start = time.time()
