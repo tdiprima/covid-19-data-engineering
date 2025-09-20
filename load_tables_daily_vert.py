@@ -26,7 +26,7 @@ def getDBConnection():
     try:
         conn = connect(**conn_info)
     except ConnectionError as ce:
-        msg = "getDBConnection() : {}".format(ce)
+        msg = f"getDBConnection() : {ce}"
         logging.error(msg)
         print(msg)
 
@@ -67,12 +67,12 @@ def createTable(file_path, tbl_name_and_schema):
             cur.execute(create_query)
             conn.commit()
         except MissingSchema as e:
-            msg = "createTable() : {}".format(e)
+            msg = f"createTable() : {e}"
             logging.error(msg)
             print(msg)
             exit(1)
         except QueryError as e:
-            msg = "createTable() : {}".format(e)
+            msg = f"createTable() : {e}"
             logging.error(msg)
             print(msg)
             exit(1)
@@ -117,10 +117,10 @@ def import_csv2database(file_path, table_name):
             except QueryError as qe:
                 print(line_count, len(row))
                 print(execute_string)
-                print("import_csv2database() : {}".format(qe))
+                print(f"import_csv2database() : {qe}")
             except Exception as exc:
                 print(line_count, len(row))
-                print("import_csv2database() : {}".format(exc))
+                print(f"import_csv2database() : {exc}")
             finally:
                 print(line_count, len(row))
                 print(execute_string)
@@ -152,9 +152,9 @@ def switch_db_table(table_schemas, table_name):
         cur.execute(execute_str)
         conn.commit()
     except QueryError as e:
-        print("switch_db_table() : {}".format(e))
+        print(f"switch_db_table() : {e}")
     except Exception as e:
-        print("switch_db_table() : {}".format(e))
+        print(f"switch_db_table() : {e}")
     finally:
         print(execute_str)
 
@@ -179,12 +179,12 @@ def is_table_exist(table_name):
             return result[0][0]  # It's either True or False
 
     except QueryError as e:
-        print("is_table_exist() : {}".format(e))
-        logging.error("is_table_exist() : {}".format(e))
+        print(f"is_table_exist() : {e}")
+        logging.error("is_table_exist() : %s", e)
         return "error"
     except Exception as e:
-        print("is_table_exist() : {}".format(e))
-        logging.error("is_table_exist() : {}".format(e))
+        print(f"is_table_exist() : {e}")
+        logging.error("is_table_exist() : %s", e)
         return "error"
 
 
@@ -201,10 +201,10 @@ def getReturnList(query_str):
                 item_list.append(item[0])
             return item_list
     except QueryError as e:
-        print("getReturnList() : {}".format(e))
+        print(f"getReturnList() : {e}")
         return []
     except Exception as e:
-        print("getReturnList() : {}".format(e))
+        print(f"getReturnList() : {e}")
 
 
 def getRecordCount(table_schema, table_name):
@@ -221,10 +221,10 @@ def getRecordCount(table_schema, table_name):
             record_count = result[0][0]
             return record_count
     except QueryError as e:
-        print("getRecordCount() : {}".format(e))
+        print(f"getRecordCount() : {e}")
         return "error"
     except Exception as e:
-        print("getRecordCount() : {}".format(e))
+        print(f"getRecordCount() : {e}")
         return "error"
 
 
@@ -310,9 +310,9 @@ def copyTableStructure(oldTable, newTable):
     try:
         cur.execute(execute_str)
     except QueryError as e:
-        print("copyTableStructure() : {}".format(e))
+        print(f"copyTableStructure() : {e}")
     except Exception as e:
-        print("copyTableStructure() : {}".format(e))
+        print(f"copyTableStructure() : {e}")
     finally:
         print(execute_str)
 
@@ -398,11 +398,11 @@ def alterColumn(table_schema, table_name):
                 print("")
             except QueryError as e:
                 print("***************************")
-                print("alterColumn() : {}".format(e))
+                print(f"alterColumn() : {e}")
                 print("============================")
                 continue
             except Exception as e:
-                print("alterColumn() : {}".format(e))
+                print(f"alterColumn() : {e}")
                 continue
             finally:
                 print(alter_str)
@@ -477,13 +477,13 @@ def batchLoadCsv2Tables(file_list, file_location, table_schemas):
             print(x)
             exit(1)
     except OSError as e:
-        print("batchLoadCsv2Tables() : {}".format(e))
+        print(f"batchLoadCsv2Tables() : {e}")
         logging.info("batchLoadCsv2Tables() : " + str(e))
     except ValueError as e:
-        print("batchLoadCsv2Tables() : {}".format(e))
+        print(f"batchLoadCsv2Tables() : {e}")
         logging.info("batchLoadCsv2Tables() : " + str(e))
     except Exception as e:
-        print("batchLoadCsv2Tables() : {}".format(e))
+        print(f"batchLoadCsv2Tables() : {e}")
         logging.info("batchLoadCsv2Tables() : " + str(e))
     finally:
         print("DONE LOADING TABLES")
@@ -564,6 +564,6 @@ if __name__ == "__main__":
         if not conn.closed():
             conn.close()
     except Exception as ex:
-        print("close conn : {}".format(ex))
+        print(f"close conn : {ex}")
 
     exit(0)

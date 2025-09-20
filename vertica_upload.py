@@ -1,11 +1,13 @@
 """
-Quarterly analytics
+Unified data warehouse integration for daily and quarterly uploads
 """
 
+import argparse
 import csv
 import json
 import logging
 import os
+import subprocess
 import time
 from datetime import datetime
 
@@ -21,7 +23,7 @@ def get_connection_str(m_str):
             c = json.load(f)
             connection_str = c[m_str]
     except KeyError as ke:
-        logging.error("Wrong key. {}".format(ke))
+        logging.error("Wrong key. %s", ke)
         exit(1)
     return connection_str
 
@@ -34,7 +36,7 @@ def connect_postgres(m_str):
         engine = sa.create_engine(connection_str)
         connect = engine.connect()
     except xx.OperationalError as ex:
-        logging.error("{}".format(ex))
+        logging.error(ex)
         exit(1)
 
     return connect
@@ -50,10 +52,51 @@ def connect_vertica():
     try:
         conn = vertica_python.connect(**conn_info)
     except ConnectionError as ce:
-        logging.error("{}".format(ce))
+        logging.error(ce)
         exit(1)
 
     return conn
+
+
+def bulk_upload():
+    logging.info("Loading data from csv files")
+    code_base = os.getcwd()
+    my_name = "vertica.sql"
+    sql_file_path = os.path.join(code_base, my_name)
+    if os.path.isfile(sql_file_path):
+        os.remove(sql_file_path)
+
+    csv_files = file_names()
+    with open(my_name, "w") as mysql:
+        for csv_file in csv_files:
+            table_name = csv_file.replace(".csv", "").lower()
+            full_table = v_schema + "." + table_name
+            file_path = os.path.join(file_location, csv_file)
+            insert_str = (
+                "COPY "
+                + full_table
+                + " FROM LOCAL '"
+                + file_path
+                + "' DELIMITER ',' SKIP 1; \n"
+            )
+            mysql.write(insert_str)
+
+    try:
+        logging.info("Running subprocess")
+        return_code = subprocess.Popen("sh batch_load_vertica.sh", shell=True).wait()
+        logging.info("return_code: " + str(return_code))
+        if return_code > 0:
+            logging.error("COPY function didn't work")
+            exit(1)
+    except OSError as e:
+        logging.error(e)
+    except ValueError as e:
+        logging.error(e)
+    except Exception as e:
+        logging.error(e)
+    finally:
+        logging.info("Done loading tables.")
+    return
 
 
 def import_csv2database(file_path, table_name):
@@ -81,18 +124,12 @@ def import_csv2database(file_path, table_name):
                 )
                 continue
 
-            # Read next row
             value_list = []
             for i in range(column_count):
                 column_value0 = row[i]
-                # escape single quote
                 column_value = column_value0.replace("'", "''")
                 value_list.append(column_value)
-                # add current date time to database
             now = datetime.today()
-            # dd/mm/YY H:M:S
-            # current_time_str= now.strftime("%d/%m/%Y %H:%M:%S")
-            # format as 2014-07-05 14:34:14
             current_time_str = now.strftime("%Y-%m-%d %H:%M:%S")
             value_list.append(current_time_str)
             value_list_2 = "'%s'" % "','".join(value_list)
@@ -112,37 +149,42 @@ def insert_tables():
             print(path, table)
             insert_str = import_csv2database(path, table)
 
-            # Update table in vertica
             try:
                 v_cursor.execute(insert_str)
                 v_conn.commit()
             except MissingSchema as e:
-                logging.error("{}".format(e))
+                logging.error(e)
                 exit(1)
             except QueryError as e:
-                logging.error("{}".format(e))
+                logging.error(e)
                 exit(1)
 
     except Exception as ex:
-        logging.error("{}".format(ex))
+        logging.error(ex)
     finally:
         logging.info("Finished loading tables.")
 
 
-def table_exists(tablename):
-    v_cursor.execute(
-        """
-        SELECT COUNT(*)
-        FROM v_catalog.tables
-        WHERE table_schema = '{0}' AND table_name = '{1}'
-        """.format(
-            v_schema, tablename
+def table_exists(dbcon, tablename):
+    if mode == "daily":
+        dbcur = dbcon.cursor()
+        dbcur.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM v_catalog.tables
+            WHERE table_schema = '{v_schema}' AND table_name = '{tablename}'
+            """
         )
-    )
-    if v_cursor.fetchone()[0] == 1:
-        return True
-
-    return False
+        return dbcur.fetchone()[0] == 1
+    else:
+        v_cursor.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM v_catalog.tables
+            WHERE table_schema = '{v_schema}' AND table_name = '{tablename}'
+            """
+        )
+        return v_cursor.fetchone()[0] == 1
 
 
 def copy_table_structure(old_table, new_table):
@@ -157,10 +199,10 @@ def copy_table_structure(old_table, new_table):
         v_cursor.execute(x)
         v_conn.commit()
     except MissingSchema as e:
-        logging.error("{}".format(e))
+        logging.error(e)
         exit(1)
     except QueryError as e:
-        logging.error("{}".format(e))
+        logging.error(e)
         exit(1)
 
 
@@ -169,7 +211,7 @@ def copy2history_table():
     for table_name in table_list:
         orig_table = v_schema + "." + table_name
         history_table = v_schema + "." + table_name + "_history"
-        has_history_table = table_exists(history_table)
+        has_history_table = table_exists(v_conn, history_table)
 
         if not has_history_table:
             copy_table_structure(orig_table, history_table)
@@ -189,7 +231,9 @@ def copy2history_table():
 
 
 def build_query(table, pg_conn, num):
-    print("build_query", table)
+    if mode == "quarterly":
+        print("build_query", table)
+    
     query_pg = (
         "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '"
         + table
@@ -215,22 +259,31 @@ def build_query(table, pg_conn, num):
                 if "text" in m_type:
                     m_type = "varchar"
                 b += m_name + " " + m_type + ","
-            # b += "load_time timestamp"  # Already there.
-            b = b[:-1]
+            
+            if mode == "quarterly":
+                b = b[:-1]
+            else:
+                b = b[:-1]
         else:
             logging.warning("Postgres table does not exist: " + table)
-            ff = file_list[num]
+            if mode == "daily":
+                m_files = file_names()
+                ff = m_files[num]
+            else:
+                ff = file_list[num]
             fff = os.path.join(file_location, ff)
             with open(fff) as my_file:
                 head = next(my_file).strip().split(",")
             for h in head:
                 b += h + " varchar,"
-            b += "load_time timestamp"  # Add it.
+            
+            if mode == "quarterly":
+                b += "load_time timestamp"
 
         create_v = a + b + c
 
     except Exception as ex:
-        logging.error("{}".format(ex))
+        logging.error(ex)
 
     return create_v
 
@@ -238,33 +291,60 @@ def build_query(table, pg_conn, num):
 def create_tables():
     logging.info("Creating tables")
     pg_conn = connect_postgres("pg_str")
+    
+    if mode == "quarterly":
+        global v_conn, v_cursor
+        v_conn = connect_vertica()
+        v_cursor = v_conn.cursor()
+        target_list = table_list
+    else:
+        v_conn = connect_vertica()
+        v_cursor = v_conn.cursor()
+        target_list = table_names()
 
     try:
-        for num, name in enumerate(table_list):
-            print(name)
+        for num, name in enumerate(target_list):
+            if mode == "quarterly":
+                print(name)
 
-            # If table exists, drop it.
-            if table_exists(name):
+            if table_exists(v_conn, name):
                 v_cursor.execute("DROP TABLE IF EXISTS " + v_schema + "." + name)
 
             create_str = build_query(name, pg_conn, num)
 
-            # Create table in vertica
             try:
                 v_cursor.execute(create_str)
                 v_conn.commit()
             except MissingSchema as e:
-                logging.error("{}".format(e))
+                logging.error(e)
                 exit(1)
             except QueryError as e:
-                logging.error("{}".format(e))
+                logging.error(e)
                 exit(1)
 
     except Exception as ex:
-        logging.error("{}".format(ex))
+        logging.error(ex)
     finally:
+        if mode == "daily":
+            v_conn.close()
         pg_conn.close()
         logging.info("Finished creating tables.")
+
+
+def file_names():
+    m_list = []
+    with open("files.list") as f:
+        for line in f:
+            m_list.append(line.strip())
+    return m_list
+
+
+def table_names():
+    m_list = []
+    ff = file_names()
+    for f in ff:
+        m_list.append(f.replace(".csv", "").lower())
+    return m_list
 
 
 def get_lists():
@@ -279,24 +359,42 @@ def get_lists():
 
 
 if __name__ == "__main__":
-    start_time = time.time()
-    file_location = "/data/covid/upload"
-    config_file = "config.json"
-    pg_schema = "schema_rtf"
-    v_schema = "schema_workspace"  # Testing.
-    FORMAT = "[%(filename)s:%(lineno)s - %(levelname)s] %(message)s"
-    logging.basicConfig(
-        level=logging.INFO, filename="out_vert_quart.log", format=FORMAT
+    parser = argparse.ArgumentParser(description="Vertica upload script")
+    parser.add_argument(
+        "mode", 
+        choices=["daily", "quarterly"],
+        help="Upload mode: daily or quarterly"
     )
-
+    args = parser.parse_args()
+    
+    mode = args.mode
+    start_time = time.time()
+    config_file = "config.json"
+    v_schema = "schema_workspace"
+    FORMAT = "[%(filename)s:%(lineno)s - %(levelname)s] %(message)s"
+    
+    if mode == "daily":
+        file_location = "./input"
+        pg_schema = "schema_hi"
+        log_file = "out_vert_dal.log"
+    else:
+        file_location = "/data/covid/upload"
+        pg_schema = "schema_rtf"
+        log_file = "out_vert_quart.log"
+        
+    logging.basicConfig(level=logging.INFO, filename=log_file, format=FORMAT)
     logging.info("BEGIN")
-    v_conn = connect_vertica()
-    v_cursor = v_conn.cursor()
-    file_list, table_list = get_lists()
-    create_tables()
-    insert_tables()
-    copy2history_table()
-    v_conn.close()
+    
+    if mode == "daily":
+        create_tables()
+        bulk_upload()
+    else:
+        file_list, table_list = get_lists()
+        create_tables()
+        insert_tables()
+        copy2history_table()
+        v_conn.close()
+        
     run_time = "--- %s seconds ---" % (time.time() - start_time)
-    logging.info("END {}".format(run_time))
+    logging.info("END %s", run_time)
     exit(0)

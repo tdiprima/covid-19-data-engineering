@@ -150,11 +150,11 @@ def is_table_exist(table_name):
             return True
     except exc.SQLAlchemyError as e:
         print(e)
-        logging.error("Exception is : {}".format(e))
+        logging.error("Exception is : %s", e)
         return "error"
     except Exception as e:
         print(e)
-        logging.error("Exception is : {}".format(e))
+        logging.error("Exception is : %s", e)
         return "error"
 
 
