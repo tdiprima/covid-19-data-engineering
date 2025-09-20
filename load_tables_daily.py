@@ -2,7 +2,6 @@
 PostgreSQL ETL pipeline
 """
 
-import sys
 import csv
 import datetime
 import json
@@ -11,6 +10,7 @@ import os
 import os.path
 import shutil
 import subprocess
+import sys
 
 import sqlalchemy as sa
 from dateutil import parser as dateParser
@@ -215,7 +215,7 @@ def isDate(string):
     try:
         dt = dateParser.parse(string)
         return (dt.hour, dt.minute, dt.second) == (0, 0, 0)
-    except:
+    except Exception:
         return False
 
 

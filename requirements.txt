@@ -1,3 +1,4 @@
 python-dateutil
 vertica-python
 sqlalchemy
+pandas
