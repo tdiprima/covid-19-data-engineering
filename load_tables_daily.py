@@ -1,5 +1,5 @@
 """
-PostgreSQL ETL pipeline
+Unified PostgreSQL/Vertica ETL pipeline using Object-Oriented Programming
 """
 
 import csv
@@ -11,518 +11,615 @@ import os.path
 import shutil
 import subprocess
 import sys
+from abc import ABC, abstractmethod
+from typing import List, Any, Optional
 
 import sqlalchemy as sa
 from dateutil import parser as dateParser
 from sqlalchemy import exc
 
-
-def getDBConnection():
-    with open("config.json") as f:
-        config = json.load(f)
-        connection_uri = config["connection_uri"]
-    engine = sa.create_engine(connection_uri)
-    connect = engine.connect()
-    return connect
+try:
+    from vertica_python import connect as vertica_connect
+    from vertica_python.errors import ConnectionError, MissingSchema, QueryError
+    VERTICA_AVAILABLE = True
+except ImportError:
+    VERTICA_AVAILABLE = False
 
 
-def createTable(file_path, table_name):
-    column_list = []
-    with open(file_path, "r", encoding="utf-8") as csvfile:
-        csv_reader = csv.reader(csvfile, delimiter=",")
-        line_count = 0
-        for line_count, row in enumerate(csv_reader):
-            if line_count == 0:
-                column_count = len(row)
-                for i in range(column_count):
-                    column = row[i]
-                    column2 = column + " text"
-                    column_list.append(column2)
-                # new_column="load_time timestamp"
-                # column_list.append(new_column);
-                listToStr = ",".join(map(str, column_list))
-                create_query = "CREATE TABLE " + table_name + " (" + listToStr + ")"
-                break
-
-        print(create_query)
-        try:
-            connection.execute(create_query)
-        except exc.SQLAlchemyError as e:
-            print(e)
-
-
-def import_csv2database(file_path, table_name):
-    column_list = []
-    with open(file_path, "r", encoding="utf-8") as csvfile:
-        csv_reader = csv.reader(csvfile, delimiter=",")
-        line_count = 0
-        column_count = 0
-
-        for line_count, row in enumerate(csv_reader):
-            if line_count == 0:
-                column_count = len(row)
-                for i in range(column_count):
-                    column = row[i]
-                    column_list.append(column)
-                # column_list.append("load_time");
-                listToStr = ",".join(map(str, column_list))
-                insert_query1 = "INSERT INTO " + table_name + " (" + listToStr + ")"
-                continue
-
-            # Read next row
-            value_list = []
-            for i in range(column_count):
-                column_value0 = row[i]
-                # escape single quote
-                column_value = column_value0.replace("'", "''")
-                value_list.append(column_value)
-            # add currrent date time to database
-            # now = datetime.datetime.today()      #
-            # format as 2014-07-05 14:34:14
-            # current_time_str= now.strftime("%Y-%m-%d %H:%M:%S")
-            # value_list.append(current_time_str);
-            value_list_2 = "'%s'" % "','".join(value_list)
-            insert_query2 = " VALUES (" + value_list_2 + ")"
-            execute_string = insert_query1 + insert_query2
-            # print ("--------------  " + str(line_count) +"  -----------------------");
+class DatabaseETL(ABC):
+    """Abstract base class for database ETL operations"""
+    
+    def __init__(self, config_file: str = "config.json"):
+        self.config_file = config_file
+        self.connection = None
+        self.cursor = None
+        self.default_data_type = "text"
+        
+    @abstractmethod
+    def get_db_connection(self):
+        """Establish database connection"""
+        pass
+    
+    @abstractmethod
+    def execute_query(self, query: str, params: Optional[Any] = None):
+        """Execute a database query"""
+        pass
+    
+    @abstractmethod
+    def fetch_results(self, query: str) -> List[Any]:
+        """Fetch query results"""
+        pass
+    
+    @abstractmethod
+    def get_table_exists_query(self, table_name: str, schema: str) -> str:
+        """Get query to check if table exists"""
+        pass
+    
+    @abstractmethod
+    def get_columns_query(self, table_name: str, schema: str) -> str:
+        """Get query to retrieve table columns"""
+        pass
+    
+    @abstractmethod
+    def get_alter_column_syntax(self, table_name: str, column_name: str, data_type: str) -> str:
+        """Get ALTER COLUMN syntax for the database"""
+        pass
+    
+    def close_connection(self):
+        """Close database connection"""
+        if self.connection:
             try:
-                connection.execute(sa.text(execute_string))
-            except exc.SQLAlchemyError as e:
-                print(line_count, len(row))
-                print(execute_string)
-                print(e)
-            except Exception:
-                print(line_count, len(row))
-                print("Unexpected error:", sys.exc_info()[0])
-            finally:
-                print(line_count, len(row))
-                print(execute_string)
-
-
-def backup_history_file(file_location, csv_name, history_folder, date_time_str):
-    file_path = os.path.join(file_location, csv_name)
-    new_folder = "upload" + "_" + date_time_str
-    new_path = os.path.join(history_folder, new_folder)
-    if not os.path.exists(new_path):
-        os.makedirs(new_path)
-    new_csv_file_path = os.path.join(new_path, csv_name)
-    shutil.copy2(file_path, new_csv_file_path)
-
-
-def switch_db_table(table_schemas, table_name):
-    full_table_name = table_schemas + "." + table_name
-    table_name_build = table_schemas + "." + table_name + "_build"
-    return_value = is_table_exist(full_table_name)
-
-    if return_value:
-        execute_str = " BEGIN;"
-        execute_str += " DROP TABLE " + full_table_name + ";"
-        execute_str += (
-            " ALTER TABLE " + table_name_build + " RENAME TO " + table_name + ";"
-        )
-        execute_str += " COMMIT;"
-    else:
-        execute_str = " BEGIN;"
-        execute_str += (
-            " ALTER TABLE " + table_name_build + " RENAME TO " + table_name + ";"
-        )
-        execute_str += " COMMIT;"
-
-    try:
-        connection.execute(sa.text(execute_str))
-    except exc.SQLAlchemyError as e:
-        print(e)
-    except Exception as e:
-        print(e)
-    finally:
-        print(execute_str)
-
-
-def is_table_exist(table_name):
-    select_str = "SELECT to_regclass('" + table_name + "');"
-    try:
-        result = list(connection.execute(select_str))
-        # print (result,result[0][0]);
-        # table does not exist.
-        if result[0][0] is None:
-            return False
-        else:
-            return True
-    except exc.SQLAlchemyError as e:
-        print(e)
-        logging.error("Exception is : %s", e)
-        return "error"
-    except Exception as e:
-        print(e)
-        logging.error("Exception is : %s", e)
-        return "error"
-
-
-def getReturnList(query_str):
-    item_list = []
-    try:
-        result = list(connection.execute(sa.text(query_str)))
-        for item in result:
-            item_list.append(item[0])
-        return item_list
-    except exc.SQLAlchemyError as e:
-        print(e)
-        return item_list
-    except Exception as e:
-        print(e)
-    finally:
-        return item_list
-
-
-def getRecordCount(table_schema, table_name):
-    table_name2 = table_schema + "." + table_name
-    select_string = "SELECT count(*) FROM " + table_name2 + ";"
-    try:
-        result = list(connection.execute(sa.text(select_string)))
-        # print (result);
-        record_count = result[0][0]
-        return record_count
-    except exc.SQLAlchemyError as e:
-        print(e)
-        return "error"
-    except Exception as e:
-        print(e)
-        return "error"
-
-
-def isBool(string):
-    return str(string).lower() in ["true", "false", "t", "f"]
-
-
-def isInteger(string):
-    try:
-        a = float(string)
-        n = int(a)
-        return a == n
-    except Exception:
-        return False
-
-
-def isNumeric(string):
-    try:
-        float(string)
-        return True
-    except Exception:
-        return False
-
-
-def isDate(string):
-    try:
-        dt = dateParser.parse(string)
-        return (dt.hour, dt.minute, dt.second) == (0, 0, 0)
-    except Exception:
-        return False
-
-
-def isTimestamp(string):
-    try:
-        dateParser.parse(string)
-        return True
-    except Exception:
-        return False
-
-
-def guessType(s):
-    # If our field is null, then we have no guess, so return None
-    if not s:
-        return "text"
-
-    if isNumeric(s):
-        try:
-            if float(s) == int(float(s)):
-                if s == "0" or s == "1":
-                    return "smallint"
-
-                if str(s)[0] == "0":
-                    return "text"
-
-                if -32768 <= int(float(s)) <= 32767:
-                    return "smallint"
-
-                if -2147483648 <= int(float(s)) <= 2147483647:
-                    return "integer"
-                else:
-                    return "bigint"
-            else:
-                return "numeric"
-        except Exception as e:
-            print(e)
-            return "numeric"
-    else:
-        if isBool(s):
-            return "boolean"
-
-        if isTimestamp(s):
-            if isDate(s):
-                return "date"
-            else:
-                return "timestamp"
-
-    return "text"
-
-
-def copyTableStructure(oldTable, newTable):
-    execure_str = " Select * into " + newTable
-    execure_str += " from " + oldTable
-    execure_str += " Where 1 = 2;"
-    try:
-        connection.execute(sa.text(execure_str))
-    except exc.SQLAlchemyError as e:
-        print(e)
-    except Exception as e:
-        print(e)
-    finally:
-        print(execure_str)
-
-
-def alterColumn(table_schema, table_name):
-    db_table = table_name + "_" + "build"
-    column_list = []
-    record_count = getRecordCount(table_schema, db_table)
-    limit_count = 1
-    if record_count > 10000:
-        limit_count = 1000
-    elif record_count > 5000:
-        limit_count = 500
-    elif record_count > 1000:
-        limit_count = 500
-    else:
-        limit_count = record_count
-    print(limit_count)
-
-    select_query = (
-        "SELECT column_name FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '"
-    )
-    select_query += table_schema + "'"
-    select_query += " and TABLE_NAME = '"
-    select_query += db_table + "'"
-    column_list = getReturnList(select_query)
-    print(column_list)
-    tmp_table = table_schema + "." + db_table
-    for column in column_list:
-        column_type_list = []
-        final_column_type = ""
-        query_str = "SELECT " + column + " FROM " + tmp_table
-        query_str += " where " + column + " is not null"
-        query_str += " limit " + str(limit_count) + " ;"
-        value_list = getReturnList(query_str)
-        for value0 in value_list:
-            value = str(value0).strip()
-            data_type = guessType(value)
-            if data_type == "integer":
-                if isTimestamp(value):
-                    if isDate(value):
-                        data_type = "date"
-            column_type_list.append(data_type)
-
-        column_type_list2 = set(column_type_list)
-        # print (column_type_list2);
-        if len(column_type_list2) == 1:
-            final_column_type = list(column_type_list2)[0]
-        elif len(column_type_list2) > 1:
-            if "text" in column_type_list2:
-                final_column_type = "text"
-            elif "timestamp" in column_type_list2:
-                final_column_type = "timestamp"
-            elif "date" in column_type_list2:
-                if "integer" in column_type_list2:
-                    final_column_type = "integer"
-            elif "numeric" in column_type_list2:
-                final_column_type = "numeric"
-            elif "bigint" in column_type_list2:
-                final_column_type = "bigint"
-            elif "integer" in column_type_list2:
-                final_column_type = "integer"
-            elif "smallint" in column_type_list2:
-                final_column_type = "smallint"
-            else:
-                final_column_type = "text"
-        else:
-            final_column_type = "text"
-
-        if final_column_type == "":
-            final_column_type = "text"
-
-        print(db_table, column, final_column_type)
-
-        if final_column_type != "text":
-            alter_str = "ALTER TABLE " + tmp_table
-            alter_str += " ALTER COLUMN " + column + " TYPE " + final_column_type
-            alter_str += " USING " + column + "::" + final_column_type + ";"
-            try:
-                connection.execute(sa.text(alter_str))
-                print("")
-            except exc.SQLAlchemyError as e:
-                print("***************************")
-                print(e)
-                print("============================")
-                continue
+                if hasattr(self.connection, 'closed') and not self.connection.closed():
+                    self.connection.close()
+                elif hasattr(self.connection, 'close'):
+                    self.connection.close()
             except Exception as e:
-                print(e)
-                continue
-            finally:
-                print(alter_str)
-                print("")
+                print(f"Error closing connection: {e}")
+    
+    def is_bool(self, string: str) -> bool:
+        return str(string).lower() in ["true", "false", "t", "f"]
 
+    def is_integer(self, string: str) -> bool:
+        try:
+            a = float(string)
+            n = int(a)
+            return a == n
+        except Exception:
+            return False
 
-def backUpCsvFiles(file_list, file_location, history_folder):
-    d = datetime.datetime.today()
-    date_time_str = d.strftime("%Y_%m_%d")
+    def is_numeric(self, string: str) -> bool:
+        try:
+            float(string)
+            return True
+        except Exception:
+            return False
 
-    for csv_file in file_list:
-        print(
-            "backup_history_file: "
-            + file_location
-            + ","
-            + csv_file
-            + ","
-            + history_folder
-        )
-        logging.info(
-            "backup_history_file: "
-            + file_location
-            + ","
-            + csv_file
-            + ","
-            + history_folder
-        )
-        backup_history_file(file_location, csv_file, history_folder, date_time_str)
+    def is_date(self, string: str) -> bool:
+        try:
+            dt = dateParser.parse(string)
+            return (dt.hour, dt.minute, dt.second) == (0, 0, 0)
+        except Exception:
+            return False
 
+    def is_timestamp(self, string: str) -> bool:
+        try:
+            dateParser.parse(string)
+            return True
+        except Exception:
+            return False
 
-def createEmptyTables(file_list, file_location, table_schemas):
-    for csv_file in file_list:
-        table_name = csv_file.replace(".csv", "").lower()
-        full_table = table_schemas + "." + table_name
-        full_table_build = full_table + "_build"
-        file_path = os.path.join(file_location, csv_file)
-        logging.info("Create empty table  " + full_table_build)
-        createTable(file_path, full_table_build)
+    def guess_type(self, s: str) -> str:
+        if not s:
+            return self.default_data_type
 
+        if self.is_numeric(s):
+            try:
+                if float(s) == int(float(s)):
+                    if s == "0" or s == "1":
+                        return "smallint"
 
-def batchLoadCsv2Tables(file_list, file_location, table_schemas):
-    code_base = os.getcwd()
-    sql_file_path = os.path.join(code_base, "insert.sql")
-    if os.path.isfile(sql_file_path):  # if insert.sql available, delete it
-        os.remove(sql_file_path)
+                    if str(s)[0] == "0":
+                        return self.default_data_type
 
-    with open("insert.sql", "w") as mysql:
+                    if -32768 <= int(float(s)) <= 32767:
+                        return "smallint"
+
+                    if -2147483648 <= int(float(s)) <= 2147483647:
+                        return "integer"
+                    else:
+                        return "bigint"
+                else:
+                    return "numeric"
+            except Exception:
+                return "numeric"
+        else:
+            if self.is_bool(s):
+                return "boolean"
+
+            if self.is_timestamp(s):
+                if self.is_date(s):
+                    return "date"
+                else:
+                    return "timestamp"
+
+        return self.default_data_type
+
+    def create_table(self, file_path: str, table_name: str):
+        """Create table based on CSV structure"""
+        column_list = []
+        with open(file_path, "r", encoding="utf-8") as csvfile:
+            csv_reader = csv.reader(csvfile, delimiter=",")
+            for line_count, row in enumerate(csv_reader):
+                if line_count == 0:
+                    for column in row:
+                        column_list.append(f"{column} {self.default_data_type}")
+                    break
+
+        columns_str = ",".join(column_list)
+        drop_query = f"DROP TABLE IF EXISTS {table_name} CASCADE;"
+        create_query = f"CREATE TABLE {table_name} ({columns_str});"
+        
+        try:
+            self.execute_query(drop_query)
+            print(f"Dropped table {table_name}")
+        except Exception as e:
+            print(f"Drop table error: {e}")
+        
+        try:
+            self.execute_query(create_query)
+            print(f"Created table {table_name}")
+        except Exception as e:
+            print(f"Create table error: {e}")
+            sys.exit(1)
+
+    def import_csv_to_database(self, file_path: str, table_name: str):
+        """Import CSV data to database table"""
+        with open(file_path, "r", encoding="utf-8") as csvfile:
+            csv_reader = csv.reader(csvfile, delimiter=",")
+            
+            for line_count, row in enumerate(csv_reader):
+                if line_count == 0:
+                    columns = ",".join(row)
+                    insert_query_base = f"INSERT INTO {table_name} ({columns})"
+                    continue
+
+                # Escape single quotes
+                escaped_values = [val.replace("'", "''") for val in row]
+                values_str = "'" + "','".join(escaped_values) + "'"
+                execute_string = f"{insert_query_base} VALUES ({values_str})"
+                
+                try:
+                    self.execute_query(execute_string)
+                    print(f"Inserted row {line_count}, {len(row)} columns")
+                except Exception as e:
+                    print(f"Insert error at line {line_count}: {e}")
+                    print(f"Query: {execute_string}")
+
+    def backup_history_file(self, file_location: str, csv_name: str, history_folder: str, date_time_str: str):
+        """Backup CSV file to history folder"""
+        file_path = os.path.join(file_location, csv_name)
+        new_folder = f"upload_{date_time_str}"
+        new_path = os.path.join(history_folder, new_folder)
+        if not os.path.exists(new_path):
+            os.makedirs(new_path)
+        new_csv_file_path = os.path.join(new_path, csv_name)
+        shutil.copy2(file_path, new_csv_file_path)
+
+    def is_table_exist(self, table_name: str, schema: str) -> bool:
+        """Check if table exists"""
+        query = self.get_table_exists_query(table_name, schema)
+        try:
+            results = self.fetch_results(query)
+            return bool(results and results[0][0])
+        except Exception as e:
+            print(f"Table exists check error: {e}")
+            return False
+
+    def switch_db_table(self, table_schema: str, table_name: str):
+        """Switch build table to production table"""
+        full_table_name = f"{table_schema}.{table_name}"
+        table_name_build = f"{table_schema}.{table_name}_build"
+        
+        if self.is_table_exist(table_name, table_schema):
+            drop_query = f"DROP TABLE {full_table_name} CASCADE;"
+            try:
+                self.execute_query(drop_query)
+            except Exception as e:
+                print(f"Drop table error: {e}")
+        
+        rename_query = f"ALTER TABLE {table_name_build} RENAME TO {table_name};"
+        try:
+            self.execute_query(rename_query)
+            print(f"Renamed table {table_name_build} to {table_name}")
+        except Exception as e:
+            print(f"Rename table error: {e}")
+
+    def get_return_list(self, query: str) -> List[Any]:
+        """Execute query and return list of first column values"""
+        try:
+            results = self.fetch_results(query)
+            return [item[0] for item in results]
+        except Exception as e:
+            print(f"Query execution error: {e}")
+            return []
+
+    def get_record_count(self, table_schema: str, table_name: str) -> int:
+        """Get record count for table"""
+        table_full = f"{table_schema}.{table_name}"
+        query = f"SELECT count(*) FROM {table_full};"
+        try:
+            results = self.fetch_results(query)
+            return results[0][0] if results else 0
+        except Exception as e:
+            print(f"Record count error: {e}")
+            return 0
+
+    def alter_column(self, table_schema: str, table_name: str):
+        """Alter column types based on data analysis"""
+        db_table = f"{table_name}_build"
+        record_count = self.get_record_count(table_schema, db_table)
+        
+        if record_count > 10000:
+            limit_count = 1000
+        elif record_count > 5000:
+            limit_count = 500
+        elif record_count > 1000:
+            limit_count = 500
+        else:
+            limit_count = record_count
+        
+        print(f"Analyzing {limit_count} records for type detection")
+        
+        columns_query = self.get_columns_query(db_table, table_schema)
+        column_list = self.get_return_list(columns_query)
+        
+        tmp_table = f"{table_schema}.{db_table}"
+        for column in column_list:
+            query = f"SELECT {column} FROM {tmp_table} WHERE {column} IS NOT NULL LIMIT {limit_count};"
+            value_list = self.get_return_list(query)
+            
+            column_types = [self.guess_type(str(value).strip()) for value in value_list]
+            unique_types = set(column_types)
+            
+            final_type = self._determine_final_type(unique_types)
+            print(f"Column {column}: {final_type}")
+            
+            if final_type != self.default_data_type:
+                alter_query = self.get_alter_column_syntax(tmp_table, column, final_type)
+                try:
+                    self.execute_query(alter_query)
+                    print(f"Altered column {column} to {final_type}")
+                except Exception as e:
+                    print(f"Alter column error: {e}")
+                    continue
+
+    def _determine_final_type(self, type_set):
+        """Determine final column type from set of detected types"""
+        if len(type_set) == 1:
+            return list(type_set)[0]
+        elif len(type_set) > 1:
+            if self.default_data_type in type_set:
+                return self.default_data_type
+            elif "timestamp" in type_set:
+                return "timestamp"
+            elif "date" in type_set:
+                if "integer" in type_set:
+                    return "integer"
+            elif "numeric" in type_set:
+                return "numeric"
+            elif "bigint" in type_set:
+                return "bigint"
+            elif "integer" in type_set:
+                return "integer"
+            elif "smallint" in type_set:
+                return "smallint"
+        return self.default_data_type
+
+    def backup_csv_files(self, file_list: List[str], file_location: str, history_folder: str):
+        """Backup all CSV files"""
+        date_time_str = datetime.datetime.today().strftime("%Y_%m_%d")
+        for csv_file in file_list:
+            logging.info(f"Backing up: {file_location}/{csv_file} to {history_folder}")
+            self.backup_history_file(file_location, csv_file, history_folder, date_time_str)
+
+    def create_empty_tables(self, file_list: List[str], file_location: str, table_schema: str):
+        """Create empty tables for all CSV files"""
         for csv_file in file_list:
             table_name = csv_file.replace(".csv", "").lower()
-            full_table = table_schemas + "." + table_name
-            table_name + "_build"
-            full_table_build = full_table + "_build"
+            full_table_build = f"{table_schema}.{table_name}_build"
             file_path = os.path.join(file_location, csv_file)
-            insert_str = (
-                "\COPY "
-                + full_table_build
-                + " FROM '"
-                + file_path
-                + "' WITH DELIMITER ',' CSV HEADER;\n"
-            )
-            print(insert_str)
-            logging.info("Batch Load Csv2Table  " + full_table_build)
-            mysql.write(insert_str)
-        mysql.close()
+            logging.info(f"Creating empty table {full_table_build}")
+            self.create_table(file_path, full_table_build)
 
-    # run psql to load batch load csv files to database
+    def alter_tables_column(self, file_list: List[str], table_schema: str):
+        """Alter column types for all tables"""
+        for csv_file in file_list:
+            table_name = csv_file.replace(".csv", "").lower()
+            logging.info(f"Altering columns for {table_schema}.{table_name}")
+            self.alter_column(table_schema, table_name)
+
+    def switch_tables_name(self, file_list: List[str], table_schema: str):
+        """Switch all build tables to production"""
+        for csv_file in file_list:
+            table_name = csv_file.replace(".csv", "").lower()
+            logging.info(f"Switching table {table_schema}.{table_name}")
+            self.switch_db_table(table_schema, table_name)
+
+    def get_tables_record_count(self, file_list: List[str], table_schema: str):
+        """Get record counts for all tables"""
+        for csv_file in file_list:
+            table_name = csv_file.replace(".csv", "").lower()
+            count = self.get_record_count(table_schema, table_name)
+            full_name = f"{table_schema}.{table_name}"
+            print(f"Record count of table {full_name} is {count}")
+            logging.info(f"Record count of table {full_name} is {count}")
+
+
+class PostgreSQLETL(DatabaseETL):
+    """PostgreSQL implementation of DatabaseETL"""
+    
+    def __init__(self, config_file: str = "config.json"):
+        super().__init__(config_file)
+        self.default_data_type = "text"
+    
+    def get_db_connection(self):
+        """Establish PostgreSQL connection using SQLAlchemy"""
+        with open(self.config_file) as f:
+            config = json.load(f)
+            connection_uri = config["connection_uri"]
+        engine = sa.create_engine(connection_uri)
+        self.connection = engine.connect()
+        return self.connection
+    
+    def execute_query(self, query: str, params: Optional[Any] = None):
+        """Execute PostgreSQL query"""
+        try:
+            if params:
+                self.connection.execute(sa.text(query), params)
+            else:
+                self.connection.execute(sa.text(query))
+        except exc.SQLAlchemyError as e:
+            raise e
+    
+    def fetch_results(self, query: str) -> List[Any]:
+        """Fetch PostgreSQL query results"""
+        try:
+            result = list(self.connection.execute(sa.text(query)))
+            return result
+        except exc.SQLAlchemyError as e:
+            print(f"Query error: {e}")
+            return []
+    
+    def get_table_exists_query(self, table_name: str, schema: str) -> str:
+        """PostgreSQL table existence query"""
+        full_name = f"{schema}.{table_name}"
+        return f"SELECT to_regclass('{full_name}');"
+    
+    def get_columns_query(self, table_name: str, schema: str) -> str:
+        """PostgreSQL columns query"""
+        return f"""
+            SELECT column_name FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{table_name}'
+        """
+    
+    def get_alter_column_syntax(self, table_name: str, column_name: str, data_type: str) -> str:
+        """PostgreSQL ALTER COLUMN syntax"""
+        return f"ALTER TABLE {table_name} ALTER COLUMN {column_name} TYPE {data_type} USING {column_name}::{data_type};"
+
+
+class VerticaETL(DatabaseETL):
+    """Vertica implementation of DatabaseETL"""
+    
+    def __init__(self, config_file: str = "config.json"):
+        super().__init__(config_file)
+        self.default_data_type = "varchar"
+    
+    def get_db_connection(self):
+        """Establish Vertica connection"""
+        if not VERTICA_AVAILABLE:
+            raise ImportError("vertica_python package not available")
+            
+        with open(self.config_file) as f:
+            conn_info = json.load(f)
+            conn_info["use_prepared_statements"] = True
+        
+        try:
+            self.connection = vertica_connect(**conn_info)
+            self.cursor = self.connection.cursor()
+            return self.connection
+        except ConnectionError as e:
+            print(f"Vertica connection error: {e}")
+            raise
+    
+    def execute_query(self, query: str, params: Optional[Any] = None):
+        """Execute Vertica query"""
+        try:
+            if params:
+                self.cursor.execute(query, params)
+            else:
+                self.cursor.execute(query)
+            self.connection.commit()
+        except (QueryError, MissingSchema) as e:
+            raise e
+    
+    def fetch_results(self, query: str) -> List[Any]:
+        """Fetch Vertica query results"""
+        try:
+            self.cursor.execute(query)
+            if self.cursor.rowcount == 0:
+                return []
+            return self.cursor.fetchall()
+        except QueryError as e:
+            print(f"Query error: {e}")
+            return []
+    
+    def get_table_exists_query(self, table_name: str, schema: str) -> str:
+        """Vertica table existence query"""
+        return f"""
+            SELECT EXISTS (
+                SELECT * FROM v_catalog.tables 
+                WHERE table_schema = '{schema}' AND table_name = '{table_name}'
+            );
+        """
+    
+    def get_columns_query(self, table_name: str, schema: str) -> str:
+        """Vertica columns query"""
+        return f"""
+            SELECT column_name FROM v_catalog.columns 
+            WHERE table_schema = '{schema}' AND table_name = '{table_name}';
+        """
+    
+    def get_alter_column_syntax(self, table_name: str, column_name: str, data_type: str) -> str:
+        """Vertica ALTER COLUMN syntax"""
+        return f"ALTER TABLE {table_name} ALTER COLUMN {column_name} SET DATA TYPE {data_type} ALL PROJECTIONS;"
+
+
+def create_etl_instance(db_type: str, config_file: str = "config.json") -> DatabaseETL:
+    """Factory function to create appropriate ETL instance"""
+    if db_type.lower() == "postgresql":
+        return PostgreSQLETL(config_file)
+    elif db_type.lower() == "vertica":
+        return VerticaETL(config_file)
+    else:
+        raise ValueError(f"Unsupported database type: {db_type}")
+
+
+def batch_load_csv_to_tables_postgresql(file_list: List[str], file_location: str, table_schema: str):
+    """PostgreSQL-specific batch loading using COPY command"""
+    sql_file_path = os.path.join(os.getcwd(), "insert.sql")
+    if os.path.isfile(sql_file_path):
+        os.remove(sql_file_path)
+
+    with open("insert.sql", "w") as f:
+        for csv_file in file_list:
+            table_name = csv_file.replace(".csv", "").lower()
+            full_table_build = f"{table_schema}.{table_name}_build"
+            file_path = os.path.join(file_location, csv_file)
+            insert_str = f"\\COPY {full_table_build} FROM '{file_path}' WITH DELIMITER ',' CSV HEADER;\n"
+            logging.info(f"Batch Load Csv2Table {full_table_build}")
+            f.write(insert_str)
+
     try:
         return_code = subprocess.Popen("sh psqlCopy.sh", shell=True).wait()
-        print(return_code)
-        return
-    except OSError as e:
-        print(e)
-        logging.info("Error occurs in func batchLoadCsv2Tables: " + str(e))
-        return
-    except ValueError as e:
-        print(e)
-        logging.info("Error occurs in func batchLoadCsv2Tables: " + str(e))
-        return
+        print(f"PostgreSQL batch load return code: {return_code}")
     except Exception as e:
-        print(e)
-        logging.info("Error occurs in func batchLoadCsv2Tables: " + str(e))
-        return
+        print(f"PostgreSQL batch load error: {e}")
+        logging.error(f"PostgreSQL batch load error: {e}")
 
 
-def alterTablesColumn(file_list, table_schemas):
-    for csv_file in file_list:
-        table_name = csv_file.replace(".csv", "").lower()
-        full_table = table_schemas + "." + table_name
-        full_table_build = full_table + "_build"
-        print("alterColumn: " + table_schemas + ", " + full_table_build)
-        logging.info("alterColumn: " + table_schemas + ", " + full_table_build)
-        alterColumn(table_schemas, table_name)
+def batch_load_csv_to_tables_vertica(file_list: List[str], file_location: str, table_schema: str):
+    """Vertica-specific batch loading using COPY command"""
+    sql_file = "batch_load_vertica.sql"
+    sql_file_path = os.path.join(os.getcwd(), sql_file)
+    if os.path.isfile(sql_file_path):
+        os.remove(sql_file_path)
+
+    with open(sql_file, "w") as f:
+        for csv_file in file_list:
+            table_name = csv_file.replace(".csv", "").lower()
+            full_table_build = f"{table_schema}.{table_name}_build"
+            file_path = os.path.join(file_location, csv_file)
+            insert_str = f"COPY {full_table_build} FROM LOCAL '{file_path}' DELIMITER ',' SKIP 1;\n"
+            logging.info(f"Batch Load Csv2Table {full_table_build}")
+            f.write(insert_str)
+
+    try:
+        return_code = subprocess.Popen("sh batch_load_vertica.sh", shell=True).wait()
+        print(f"Vertica batch load return code: {return_code}")
+        if return_code > 0:
+            logging.error("Vertica COPY function failed")
+            sys.exit(1)
+    except Exception as e:
+        print(f"Vertica batch load error: {e}")
+        logging.error(f"Vertica batch load error: {e}")
 
 
-def switchTablesName(file_list, table_schemas):
-    for csv_file in file_list:
-        table_name = csv_file.replace(".csv", "").lower()
-        print("switch_db_table: " + table_schemas + ", " + table_name)
-        logging.info("switch_db_table: " + table_schemas + ", " + table_name)
-        switch_db_table(table_schemas, table_name)
-
-
-def getTablesRecordCount(file_list, table_schemas):
-    for csv_file in file_list:
-        table_name = csv_file.replace(".csv", "").lower()
-        return_val = getRecordCount(table_schemas, table_name)
-        full_table_name = table_schemas + "." + table_name
-        print(
-            "Record count of table  " + full_table_name + " is " + str(return_val) + ";"
-        )
-        logging.info(
-            "Record count of table  " + full_table_name + " is " + str(return_val) + ";"
-        )
-
-
-if __name__ == "__main__":
+def main():
+    """Main execution function"""
     logging.basicConfig(
         level=logging.INFO,
         filename="output.log",
         format="%(asctime)s :: %(levelname)s :: %(name)s :: Line No %(lineno)d :: %(message)s",
     )
-
-    connection = getDBConnection()
-
-    file_list = [
-        "PH_D_Person_Race.csv",
-        "PH_D_Person.csv",
-        "PH_F_Claim.csv",
-        "PH_D_Person_Alias.csv",
-        "PH_D_Person_Demographics.csv",
-        "PH_F_Encounter.csv",
-        "PH_F_Encounter_Benefit_Coverage.csv",
-        "PH_F_Encounter_Location.csv",
-        "PH_F_Medication.csv",
-        "PH_F_Procedure.csv",
-        "PH_F_Condition.csv",
-        "PH_F_Result.csv",
-        "EMPI_ID_Observation_Period.csv",
-        "Map_Between_Claim_Id_Encounter_Id.csv",
-        "recent_documents_titles.csv",
-        "recent_enc_with_documents.csv",
-        "recent_rad_documents_titles.csv",
-        "pui_mapped_mrns_to_empi_id.csv",
-        "map2_condition_occurrence_with_ccs.csv",
-        "hi_care_site.csv",
-        "med_admin.csv",
-        "med_admin_ingred.csv",
-    ]
-
+    
+    # Configuration
+    db_type = os.getenv("DB_TYPE", "postgresql")  # Default to PostgreSQL
     file_location = "./input/"
     history_folder = "./history"
-    table_schemas = "schema_hi"
+    table_schema = "schema_hi"
+    
+    # Validate directories
+    if not os.path.exists(file_location):
+        print(f"No such directory: {file_location}")
+        sys.exit(1)
+    
+    if not os.path.exists(history_folder):
+        print(f"No such directory: {history_folder}")
+        sys.exit(1)
+    
+    # Create ETL instance
+    try:
+        etl = create_etl_instance(db_type)
+        etl.get_db_connection()
+    except Exception as e:
+        print(f"Failed to create ETL instance: {e}")
+        sys.exit(1)
+    
+    # Get file list
+    if db_type.lower() == "vertica" and os.path.exists("files.list"):
+        # Vertica version reads from files.list
+        file_list = []
+        with open("files.list") as f:
+            for line in f:
+                file_list.append(line.strip())
+    else:
+        # PostgreSQL version uses hardcoded list
+        file_list = [
+            "PH_D_Person_Race.csv",
+            "PH_D_Person.csv",
+            "PH_F_Claim.csv",
+            "PH_D_Person_Alias.csv",
+            "PH_D_Person_Demographics.csv",
+            "PH_F_Encounter.csv",
+            "PH_F_Encounter_Benefit_Coverage.csv",
+            "PH_F_Encounter_Location.csv",
+            "PH_F_Medication.csv",
+            "PH_F_Procedure.csv",
+            "PH_F_Condition.csv",
+            "PH_F_Result.csv",
+            "EMPI_ID_Observation_Period.csv",
+            "Map_Between_Claim_Id_Encounter_Id.csv",
+            "recent_documents_titles.csv",
+            "recent_enc_with_documents.csv",
+            "recent_rad_documents_titles.csv",
+            "pui_mapped_mrns_to_empi_id.csv",
+            "map2_condition_occurrence_with_ccs.csv",
+            "hi_care_site.csv",
+            "med_admin.csv",
+            "med_admin_ingred.csv",
+        ]
+    
+    try:
+        # Execute ETL pipeline
+        etl.backup_csv_files(file_list, file_location, history_folder)
+        etl.create_empty_tables(file_list, file_location, table_schema)
+        
+        # Database-specific batch loading
+        if db_type.lower() == "postgresql":
+            batch_load_csv_to_tables_postgresql(file_list, file_location, table_schema)
+        elif db_type.lower() == "vertica":
+            batch_load_csv_to_tables_vertica(file_list, file_location, table_schema)
+        
+        # Common operations
+        etl.alter_tables_column(file_list, table_schema)
+        etl.switch_tables_name(file_list, table_schema)
+        etl.get_tables_record_count(file_list, table_schema)
+        
+    finally:
+        etl.close_connection()
+    
+    print("ETL pipeline completed successfully!")
 
-    backUpCsvFiles(file_list, file_location, history_folder)
-    createEmptyTables(file_list, file_location, table_schemas)
-    batchLoadCsv2Tables(file_list, file_location, table_schemas)
-    alterTablesColumn(file_list, table_schemas)
-    switchTablesName(file_list, table_schemas)
-    getTablesRecordCount(file_list, table_schemas)
 
-    connection.close()
-    exit()
+if __name__ == "__main__":
+    main()
