@@ -524,7 +524,7 @@ def getTablesRecordCount(file_list, table_schemas):
 
 if __name__ == "__main__":
     file_location = "./input/"
-    history_folder = "/data/covid/uploads_timestamped/ph_csv"
+    history_folder = "./history"
     table_schemas = "schema_hi"
     # table_schemas = "schema_workspace"  # Testing.
 
