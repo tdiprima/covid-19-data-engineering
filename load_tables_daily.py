@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, List, Optional
 
 import sqlalchemy as sa
@@ -83,7 +84,7 @@ class DatabaseETL(ABC):
                 print(f"Error closing connection: {e}")
 
     def is_bool(self, string: str) -> bool:
-        return str(string).lower() in ["true", "false", "t", "f"]
+        return string.lower() in ("true", "false", "t", "f")
 
     def is_integer(self, string: str) -> bool:
         try:
@@ -121,10 +122,10 @@ class DatabaseETL(ABC):
         if self.is_numeric(s):
             try:
                 if float(s) == int(float(s)):
-                    if s == "0" or s == "1":
+                    if s in ("0", "1"):
                         return "smallint"
 
-                    if str(s)[0] == "0":
+                    if s[0] == "0":
                         return self.default_data_type
 
                     if -32768 <= int(float(s)) <= 32767:
@@ -208,8 +209,8 @@ class DatabaseETL(ABC):
         file_path = os.path.join(file_location, csv_name)
         new_folder = f"upload_{date_time_str}"
         new_path = os.path.join(history_folder, new_folder)
-        if not os.path.exists(new_path):
-            os.makedirs(new_path)
+        if not Path(new_path).exists():
+            Path(new_path).mkdir(parents=True)
         new_csv_file_path = os.path.join(new_path, csv_name)
         shutil.copy2(file_path, new_csv_file_path)
 
@@ -508,9 +509,9 @@ def batch_load_csv_to_tables_postgresql(
     file_list: List[str], file_location: str, table_schema: str
 ):
     """PostgreSQL-specific batch loading using COPY command"""
-    sql_file_path = os.path.join(os.getcwd(), "insert.sql")
-    if os.path.isfile(sql_file_path):
-        os.remove(sql_file_path)
+    sql_file_path = Path.cwd() / "insert.sql"
+    if sql_file_path.is_file():
+        sql_file_path.unlink()
 
     with open("insert.sql", "w") as f:
         for csv_file in file_list:
@@ -534,9 +535,9 @@ def batch_load_csv_to_tables_vertica(
 ):
     """Vertica-specific batch loading using COPY command"""
     sql_file = "batch_load_vertica.sql"
-    sql_file_path = os.path.join(os.getcwd(), sql_file)
-    if os.path.isfile(sql_file_path):
-        os.remove(sql_file_path)
+    sql_file_path = Path.cwd() / sql_file
+    if sql_file_path.is_file():
+        sql_file_path.unlink()
 
     with open(sql_file, "w") as f:
         for csv_file in file_list:
@@ -573,11 +574,11 @@ def main():
     table_schema = "schema_hi"
 
     # Validate directories
-    if not os.path.exists(file_location):
+    if not Path(file_location).exists():
         print(f"No such directory: {file_location}")
         sys.exit(1)
 
-    if not os.path.exists(history_folder):
+    if not Path(history_folder).exists():
         print(f"No such directory: {history_folder}")
         sys.exit(1)
 
@@ -590,7 +591,7 @@ def main():
         sys.exit(1)
 
     # Get file list
-    if db_type.lower() == "vertica" and os.path.exists("files.list"):
+    if db_type.lower() == "vertica" and Path("files.list").exists():
         # Vertica version reads from files.list
         file_list = []
         with open("files.list") as f:

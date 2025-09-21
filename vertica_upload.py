@@ -10,6 +10,7 @@ import os
 import subprocess
 import time
 from datetime import datetime
+from pathlib import Path
 
 import sqlalchemy as sa
 import sqlalchemy.exc as xx
@@ -60,11 +61,11 @@ def connect_vertica():
 
 def bulk_upload():
     logging.info("Loading data from csv files")
-    code_base = os.getcwd()
+    code_base = Path.cwd()
     my_name = "vertica.sql"
-    sql_file_path = os.path.join(code_base, my_name)
-    if os.path.isfile(sql_file_path):
-        os.remove(sql_file_path)
+    sql_file_path = code_base / my_name
+    if sql_file_path.is_file():
+        sql_file_path.unlink()
 
     csv_files = file_names()
     with open(my_name, "w") as mysql:
@@ -96,7 +97,6 @@ def bulk_upload():
         logging.error(e)
     finally:
         logging.info("Done loading tables.")
-    return
 
 
 def import_csv2database(file_path, table_name):

@@ -27,7 +27,7 @@ def a_file(f):
     df = pd.read_csv(filepath + f)
     data_types = df.dtypes
     for name, dtype in data_types.iteritems():
-        x = f"{dtype}"
+        x = str(dtype)
         print(f.replace(".csv", "") + "," + name + "," + x)
 
 
