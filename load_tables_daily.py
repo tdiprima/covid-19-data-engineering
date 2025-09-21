@@ -154,7 +154,7 @@ class DatabaseETL(ABC):
     def create_table(self, file_path: str, table_name: str):
         """Create table based on CSV structure"""
         column_list = []
-        with open(file_path, "r", encoding="utf-8") as csvfile:
+        with open(file_path, encoding="utf-8") as csvfile:
             csv_reader = csv.reader(csvfile, delimiter=",")
             for line_count, row in enumerate(csv_reader):
                 if line_count == 0:
@@ -181,7 +181,7 @@ class DatabaseETL(ABC):
 
     def import_csv_to_database(self, file_path: str, table_name: str):
         """Import CSV data to database table"""
-        with open(file_path, "r", encoding="utf-8") as csvfile:
+        with open(file_path, encoding="utf-8") as csvfile:
             csv_reader = csv.reader(csvfile, delimiter=",")
 
             for line_count, row in enumerate(csv_reader):

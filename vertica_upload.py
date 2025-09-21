@@ -101,7 +101,7 @@ def bulk_upload():
 
 def import_csv2database(file_path, table_name):
     column_list = []
-    with open(file_path, "r", encoding="utf-8") as csvfile:
+    with open(file_path, encoding="utf-8") as csvfile:
         csv_reader = csv.reader(csvfile, delimiter=",")
         column_count = 0
 
@@ -223,10 +223,10 @@ def copy2history_table():
             v_cursor.execute(execute_str)
             v_conn.commit()
         except MissingSchema as e:
-            logging.error("{}".format(e))
+            logging.error(e)
             exit(1)
         except QueryError as e:
-            logging.error("{}".format(e))
+            logging.error(e)
             exit(1)
 
 
